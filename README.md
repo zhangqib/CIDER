@@ -1,6 +1,6 @@
 # CIDER: Counterfactual-Invariant Diffusion-based GNN Explainer for Causal Subgraph Inference
 
-This office implement of CIDER is based on the [PyTorch Geometric]
+This official implement of CIDER is based on the [PyTorch Geometric]
 
 ## Using CIDER
 ### Requirements
