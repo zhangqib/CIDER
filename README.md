@@ -6,6 +6,7 @@ This office implement of CIDER is based on the [PyTorch Geometric]
 ### Requirements
 ```shell
 conda create -n cider requirements.yaml
+conda activate cider
 ```
 ### Replication the paper's results
 ```shell
