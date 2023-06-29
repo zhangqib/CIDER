@@ -194,7 +194,7 @@ def main(args):
                                        batch_size=args.batch_size * args.N)
                 torch.save(
                     explainer_model.state_dict(),
-                    os.path.join('./params/nci/explainer_' + args.dataset +
+                    os.path.join('./params/explainer_' + args.dataset +
                                  '.ckpt'))
                 print('best result:', best_result)
                 print('test result:', test_result)
