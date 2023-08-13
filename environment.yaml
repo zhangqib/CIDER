@@ -1,0 +1,13 @@
+name: cider
+channels:
+  - pytorch
+  - defaults
+  - pyg
+  - nvidia
+dependencies:
+  - python=3.11.4
+  - pytorch=2.0.1
+  - pytorch-cuda=11.7
+  - pyg=2.3.1
+  - pandas=1.5.3
+  - tensorboard=2.12.1
