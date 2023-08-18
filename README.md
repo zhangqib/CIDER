@@ -40,7 +40,7 @@ for epoch in range(100):
     train_one_epoch(...)
 
 ## use the trained cider model to explain the model for a specific data(e.g. dataset[0])
-explainations = cider.get_explainations(model, dataset[0])
+explainations = cider.get_explainations(dataset[0].x, dataset[0].edge_index)
 
 ```
 
