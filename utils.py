@@ -7,8 +7,7 @@ from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss, L1Loss
 from torch_geometric.data import Data
 from math import ceil
 import random
-import numpy as np
-import torch
+# import numpy as np
 import torch_geometric
 from torch_geometric.loader import DataLoader
 from sklearn.metrics import confusion_matrix
@@ -34,14 +33,16 @@ def dpp_diversity(samples: List[torch.Tensor],
 
 
 def train_one_epoch(train_loader, explainer_model, causal_criterion,
-                    reconstruction_criterion, optimizer, task_model, epoch,
-                    args):
+                    reconstruction_criterion, optimizer, task_model, epoch, 
+                    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+                    args=None):
     # loss clear
     total_loss_r = 0  # reconstruction loss
     total_loss_c = 0  # causal loss
     total_loss_kld_causal = 0  # kl-divergence loss
     total_loss_kld_non_causal = 0
     # loss_d = 0
+    toral_loss_uniform = 0
     total_loss_diff = 0
     total_loss_reg = 0
     total_loss = 0
@@ -51,13 +52,11 @@ def train_one_epoch(train_loader, explainer_model, causal_criterion,
     diff_criterion = MSELoss()
     reg_criterion = L1Loss()
 
-    sparsity = random.uniform(0.5, 0.9) if args.random_sparsity else 0.8
+    sparsity = random.uniform(0.5, 0.9) if args.random_sparsity else args.sparsity
 
     explainer_model.train()
     task_model.train()
     optimizer.zero_grad()
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     for data in train_loader:
         data = data.to(device)
@@ -65,7 +64,7 @@ def train_one_epoch(train_loader, explainer_model, causal_criterion,
             data.x, data.edge_index, data.edge_attr)
 
         edge_weight_causal, edge_weight_non_causal, mu_causal, mu_non_causal, logvar_causal, logvar_non_causal = explainer_model(
-            data.x, data.edge_index)
+            data.x, data.edge_index, device=device)
 
         mu_causal, mu_non_causal, logvar_causal, logvar_non_causal = explainer_model.encode(
             data.x, data.edge_index, data.edge_attr)
@@ -81,34 +80,37 @@ def train_one_epoch(train_loader, explainer_model, causal_criterion,
         loss_kld_non_causal = -0.5 * torch.sum(1. + logvar_non_causal -
                                                mu_non_causal**2 -
                                                logvar_non_causal.exp())
+
         loss_reg = reg_criterion(
             edge_weight_causal,
             torch.zeros_like(edge_weight_causal).to(device))
 
         # compute causal loss
-        loss_c, correct_batch = explainer_model.CF_forward(data,
+        loss_uniform, loss_c, correct_batch = explainer_model.CF_forward(data,
                                                            causal_criterion,
                                                            num_sample=args.N,
-                                                           sparsity=sparsity)
+                                                           sparsity=sparsity,
+                                                           device=device)
 
         # Backpropagate the total loss and update the model parameters using the optimizer
-        loss = args.alpha_r * loss_r + (args.alpha_c * loss_c) + (
+        loss = (args.alpha_r * loss_r) + (args.alpha_c * loss_c) + (
             args.alpha_kld * (loss_kld_causal + loss_kld_non_causal)
-        ) + args.alpha_reg * loss_reg + args.alpha_diff * loss_diff
+        ) + args.alpha_reg * loss_reg + args.alpha_diff * loss_diff + loss_uniform
         loss.backward()
         optimizer.step()
 
         total_loss_r += loss_r.item()
         total_loss_c += loss_c.item()
-        total_loss_kld_causal -= loss_kld_causal.item()
-        total_loss_kld_non_causal -= loss_kld_non_causal.item()
+        total_loss_kld_causal += loss_kld_causal.item()
+        total_loss_kld_non_causal += loss_kld_non_causal.item()
         total_loss_reg += loss_reg.item()
-        total_loss_diff -= loss_diff.item()
+        total_loss_diff += loss_diff.item()
+        toral_loss_uniform += loss_uniform.item()
         total_loss += loss.item()
 
         torch.cuda.empty_cache()
         acc += correct_batch
-    acc /= len(train_loader)
+    acc /= len(train_loader.dataset)
 
     return {
         "total loss": total_loss,
@@ -116,9 +118,10 @@ def train_one_epoch(train_loader, explainer_model, causal_criterion,
         "regular loss": total_loss_reg,
         "reconstruction loss": total_loss_r,
         "causal diversity loss": total_loss_kld_causal,
-        "non causal diversity": total_loss_kld_non_causal,
+        "non causal diversity loss": total_loss_kld_non_causal,
+        "uniform loss": loss_uniform,
         "diff loss": total_loss_diff,
-        "trian acc": acc
+        "train acc": acc
     }
 
 
@@ -144,9 +147,9 @@ def validate(
     for sparsity, true_sparsity in zip(sparsities, true_sparsities):
         tmp_set = []
         for spa_data in spa_set:
-            spa_data = spa_data.cuda()
+            spa_data = spa_data.to(device)
             edge_weight_causal, _, _, _, _, _ = explainer_model(
-                spa_data.x, spa_data.edge_index)
+                spa_data.x, spa_data.edge_index, device=device)
 
             topk = max(ceil(spa_data.edge_index.shape[1] * sparsity), 1)
             threshold = edge_weight_causal.sort(
@@ -160,17 +163,18 @@ def validate(
             results[str(true_sparsity)], cms[str(
                 true_sparsity)] = evaluate_graphs_accuracy(val_loader,
                                                            task_model,
+                                                           device=device,
                                                            require_cm=True)
         else:
             results[str(true_sparsity)] = evaluate_graphs_accuracy(
-                val_loader, task_model)
+                val_loader, task_model, device=device)
 
     spa_edge_count = 0
     edge_count = 0
     for spa_data, data in zip(spa_set, val_set):
         spa_edge_count += spa_data.edge_index.shape[1]
         edge_count += data.edge_index.shape[1]
-    print('sparsitiy', spa_edge_count / edge_count)
+    # print('sparsitiy', spa_edge_count / edge_count)
 
     if require_cm:
         return results, cms
@@ -205,8 +209,9 @@ def evaluate_graphs_accuracy(
     model.to(device)
     model.eval()
     correct = 0
-    all_labels = []
+
     if require_cm:
+        all_labels = []
         all_predictions = []
 
     for data in test_loader:
@@ -217,9 +222,9 @@ def evaluate_graphs_accuracy(
         )
         predictions = output.argmax(dim=1).cpu().numpy().reshape(-1)
         labels = data.y.cpu().numpy().reshape(-1)
-        all_labels.extend(labels)
         correct += float((predictions == labels).sum())
         if require_cm:
+            all_labels.extend(labels)
             all_predictions.extend(predictions)
     accuracy = correct / len(test_loader.dataset)
     if require_cm:
@@ -230,21 +235,24 @@ def evaluate_graphs_accuracy(
 
 
 @torch.no_grad()
-def random_test(test_loader, model):
+def random_test(test_loader, model, device=('cuda' if torch.cuda.is_available() else 'cpu')):
     model.eval()
     correct = 0
 
     for data in test_loader:
         adj = to_dense_adj(data.edge_index)
-        random_adj = torch.randn_like(adj) > 0
-        random_edge, _ = dense_to_sparse(random_adj)
-        # data = data.cuda()
+        random_adj = torch.randn_like(adj)
+        random_adj = torch.where(random_adj > 0, random_adj, torch.zeros_like(random_adj))
+        random_edge, weight = dense_to_sparse(random_adj)
+        topk = data.edge_index.shape[1]
+        threshold = weight.sort(descending=True).values.topk(topk).values[-1]
+        random_edge = random_edge.T[weight>threshold].T
         output = model(
-            data.x.cuda(),
-            random_edge.cuda(),
-            data.batch.cuda(),
+            data.x.to(device),
+            random_edge.to(device),
+            data.batch.to(device),
         )
-        correct += float(output.argmax(dim=1).eq(data.y.cuda()).sum().item())
+        correct += float(output.argmax(dim=1).eq(data.y.to(device)).sum().item())
     return correct / (len(test_loader.dataset))
 
 

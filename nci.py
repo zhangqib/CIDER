@@ -7,6 +7,8 @@ import random
 
 
 class NCI(InMemoryDataset):
+    """Dataset class for the NCI1 dataset
+    """
 
     splits = ['training', 'evaluation', 'testing']
 

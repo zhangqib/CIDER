@@ -20,16 +20,14 @@ class GcnEncoderGraph(nn.Module):
                  concat=False,
                  dropout=0.0,
                  add_self=True,
-                 args=None) -> None:
+                 bias=True) -> None:
         super(GcnEncoderGraph, self).__init__()
         self.concat = concat
         self.add_self = add_self
         self.bn = bn
         self.num_layers = num_layers
         self.num_aggs = 1
-        self.bias = True
-        if args is not None:
-            self.bias = args.bias
+        self.bias = bias
 
         self.conv_first, self.conv_block, self.conv_last = self.build_conv_layers(
             input_dim,
@@ -43,8 +41,7 @@ class GcnEncoderGraph(nn.Module):
         self.act = nn.ReLU()
         self.label_dim = label_dim
 
-        if True:
-            self.pred_input_dim = hidden_dim * (num_layers - 1) + embedding_dim
+        self.pred_input_dim = hidden_dim * (num_layers - 1) + embedding_dim
         self.pred_model = self.build_pred_layers(self.pred_input_dim,
                                                  pred_hidden_dims,
                                                  label_dim,
