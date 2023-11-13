@@ -30,12 +30,16 @@ train_loader = DataLoader(train_set,
 
 criterion = CrossEntropyLoss()
 
+device = torch.device('cuda:2')
+
 model = GcnEncoderGraph(input_dim=14,
                         hidden_dim=50,
                         embedding_dim=10,
                         num_layers=3,
                         pred_hidden_dims=[10, 10],
                         label_dim=2)
+
+model.to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
@@ -46,7 +50,7 @@ for epoch in range(1, epochs + 1):
     loss_all = 0
     optimizer.zero_grad()
     for data in train_loader:
-        data = data.cuda()
+        data = data.to(device)
         y_pred = model(data.x, data.edge_index, data.batch)
         loss = criterion(y_pred, data.y)
         loss.backward()
@@ -58,7 +62,7 @@ for epoch in range(1, epochs + 1):
         correct = 0
         with torch.no_grad():
             for data in test_loader:
-                data = data.cuda()
+                data = data.to(device)
                 y_pred = model(
                     data.x,
                     data.edge_index,

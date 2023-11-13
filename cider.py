@@ -25,7 +25,7 @@ class CIDER(nn.Module):
         hidden_channels1=32,
         hidden_channels2=64,
         hidden_channels3=10,
-        decoder_act=torch.sigmoid,
+        decoder_act=torch.relu,
     ) -> None:
         super(CIDER, self).__init__()
 
@@ -40,12 +40,8 @@ class CIDER(nn.Module):
         self.gcn_logvar_causal = GCNConv(hidden_channels1, hidden_channels2)
         self.gcn_logvar_non_causal = GCNConv(hidden_channels1, hidden_channels2)
 
-        self.decoder_causal = InnerProductDecoderMLP(
-            hidden_channels2, hidden_channels1, hidden_channels3, act=decoder_act
-        )
-        self.decoder_non_causal = InnerProductDecoderMLP(
-            hidden_channels2, hidden_channels1, hidden_channels3, act=decoder_act
-        )
+        self.decoder_causal = InnerProductDecoderMLP(hidden_dims=None, act=decoder_act)
+        self.decoder_non_causal = InnerProductDecoderMLP(hidden_dims=None, act=decoder_act)
         self.task_model = task_model
         self.relu = ReLU()
         self.hidden_channels2 = hidden_channels2
@@ -297,7 +293,9 @@ class CIDER(nn.Module):
             )
             # print(str(true_sparsity), ' causal ', edge_weight_causal)
             # print(str(true_sparsity), ' non ausal ', edge_weight_non_causal)
-            edge_index = edge_index.T[edge_weight_causal >= threshold].T
+            noise = (torch.randn(edge_weight_causal.shape[0]//2)*1e-4).repeat_interleave(2)
+            noise = noise.to(device)
+            edge_index = edge_index.T[edge_weight_causal+noise > threshold].T
             explainations[str(true_sparsity)] = Data(x=x, edge_index=edge_index)
 
         return explainations
@@ -317,78 +315,138 @@ class CIDER(nn.Module):
         std + mu
 
 
+# class InnerProductDecoderMLP(nn.Module):
+#     """Decoder for using inner product for prediction."""
+
+#     def __init__(
+#         self, input_dim, hidden_dim1, hidden_dim2, dropout=0.1, act=torch.sigmoid
+#     ):
+#         super(InnerProductDecoderMLP, self).__init__()
+
+#         # Fully connected layers
+#         self.fc = nn.Linear(input_dim, hidden_dim1)
+#         self.fc2 = nn.Linear(hidden_dim1, hidden_dim2)
+
+#         self.dropout = dropout
+#         self.act = act
+
+#         # Initialize the parameters
+#         self._reset_parameters()
+
+#     def _reset_parameters(self):
+#         """
+#         Reset model parameters using Xavier initialization.
+#         """
+#         torch.nn.init.xavier_uniform_(self.fc.weight)
+#         torch.nn.init.zeros_(self.fc.bias)
+#         torch.nn.init.xavier_uniform_(self.fc2.weight)
+#         torch.nn.init.zeros_(self.fc2.bias)
+
+#     def forward_all(self, z):
+#         """
+#         Compute the forward pass for the entire graph.
+
+#         Args:
+#             z (torch.Tensor): The latent space Z.
+
+#         Returns:
+#             torch.Tensor: The adjacency matrix of the graph.
+#         """
+#         z = self._forward_fc(z)
+#         adj = self.act(torch.matmul(z, z.t()))
+#         return adj
+
+#     def forward(self, z: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+#         """
+#         Compute the forward pass for the given node-pairs.
+
+#         Args:
+#             z (torch.Tensor): The latent space Z.
+#             edge_index (torch.Tensor): Index tensor representing node-pairs in the graph.
+
+#         Returns:
+#             torch.Tensor: The predicted values for the node-pairs.
+#         """
+#         z = self._forward_fc(z)
+
+#         edge_weight = self.act((z[edge_index[0]] * z[edge_index[1]]).sum(dim=1))
+
+#         return edge_weight
+
+#     def _forward_fc(self, z):
+#         """
+#         Compute the forward pass through the fully connected layers.
+
+#         Args:
+#             z (torch.Tensor): The latent space Z.
+
+#         Returns:
+#             torch.Tensor: The output after passing through the fully connected layers.
+#         """
+#         z1 = torch.relu(self.fc(z))
+#         z2 = torch.sigmoid(self.fc2(z1))
+#         z3 = F.dropout(z2, self.dropout, training=self.training)
+#         return z3
+
 class InnerProductDecoderMLP(nn.Module):
     """Decoder for using inner product for prediction."""
 
-    def __init__(
-        self, input_dim, hidden_dim1, hidden_dim2, dropout=0.1, act=torch.sigmoid
-    ):
+    def __init__(self, hidden_dims, dropout=0.1, act=torch.sigmoid):
         super(InnerProductDecoderMLP, self).__init__()
-
-        # Fully connected layers
-        self.fc = nn.Linear(input_dim, hidden_dim1)
-        self.fc2 = nn.Linear(hidden_dim1, hidden_dim2)
-
         self.dropout = dropout
         self.act = act
 
-        # Initialize the parameters
-        self._reset_parameters()
+        # Initialize hidden_dims as an empty list if None is provided
+        hidden_dims = hidden_dims or []
+
+        # Create the layers based on hidden_dims
+        self.fc_layers = nn.ModuleList()
+        for i in range(1, len(hidden_dims)):
+            self.fc_layers.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
+
+        # Output layer is only added if there are hidden layers
+        if hidden_dims:
+            self.output_layer = nn.Linear(hidden_dims[-1], hidden_dims[0])
+            self._reset_parameters()
 
     def _reset_parameters(self):
         """
-        Reset model parameters using Xavier initialization.
+        Reset model parameters using Xavier initialization for all layers.
         """
-        torch.nn.init.xavier_uniform_(self.fc.weight)
-        torch.nn.init.zeros_(self.fc.bias)
-        torch.nn.init.xavier_uniform_(self.fc2.weight)
-        torch.nn.init.zeros_(self.fc2.bias)
+        for layer in self.fc_layers:
+            torch.nn.init.xavier_uniform_(layer.weight)
+            torch.nn.init.zeros_(layer.bias)
+        torch.nn.init.xavier_uniform_(self.output_layer.weight)
+        torch.nn.init.zeros_(self.output_layer.bias)
+
+    def _forward_fc(self, z):
+        """
+        Compute the forward pass through the fully connected layers.
+        """
+        for layer in self.fc_layers:
+            z = F.relu(layer(z))
+            z = F.dropout(z, self.dropout, training=self.training)
+        if self.fc_layers:
+            z = self.output_layer(z)
+        return z
 
     def forward_all(self, z):
         """
         Compute the forward pass for the entire graph.
-
-        Args:
-            z (torch.Tensor): The latent space Z.
-
-        Returns:
-            torch.Tensor: The adjacency matrix of the graph.
         """
-        z = self._forward_fc(z)
+        if self.fc_layers:
+            z = self._forward_fc(z)
         adj = self.act(torch.matmul(z, z.t()))
         return adj
 
     def forward(self, z: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         """
         Compute the forward pass for the given node-pairs.
-
-        Args:
-            z (torch.Tensor): The latent space Z.
-            edge_index (torch.Tensor): Index tensor representing node-pairs in the graph.
-
-        Returns:
-            torch.Tensor: The predicted values for the node-pairs.
         """
-        z = self._forward_fc(z)
-
+        if self.fc_layers:
+            z = self._forward_fc(z)
         edge_weight = self.act((z[edge_index[0]] * z[edge_index[1]]).sum(dim=1))
-
         return edge_weight
-
-    def _forward_fc(self, z):
-        """
-        Compute the forward pass through the fully connected layers.
-
-        Args:
-            z (torch.Tensor): The latent space Z.
-
-        Returns:
-            torch.Tensor: The output after passing through the fully connected layers.
-        """
-        z1 = torch.relu(self.fc(z))
-        z2 = torch.sigmoid(self.fc2(z1))
-        z3 = F.dropout(z2, self.dropout, training=self.training)
-        return z3
 
 
 if __name__ == "__main__":

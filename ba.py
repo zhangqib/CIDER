@@ -94,8 +94,8 @@ if __name__ == "__main__":
                                  )
 
     model.cuda()
-    model.load_state_dict(torch.load('params/ba2_net.pt'))
-    print(model)
+    # model.load_state_dict(torch.load('params/ba2_net.pt'))
+    # print(model)
     best_acc = 0
     for epoch in range(1, epochs+1):
         model.train()
@@ -133,5 +133,5 @@ if __name__ == "__main__":
                 print('train acc: ', correct_train / len(train_set))
                 if correct_test/len(test_set) > best_acc:
                     best_acc = correct_test/len(test_set)
-                    # torch.save(model.state_dict(), 'params/ba2.pt')
-                print('best acc', best_acc)
+                    torch.save(model.state_dict(), 'params/ba2_net.pt')
+                    print('best acc', best_acc)

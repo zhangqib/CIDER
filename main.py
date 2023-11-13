@@ -145,6 +145,7 @@ def main(args):
         hidden_channels2=args.hidden_channels2,
         hidden_channels3=args.hidden_channels3,
         task_model=task_model,
+        decoder_act=torch.relu
     )
     explainer_model.to(device)
     task_model.to(device)
@@ -155,7 +156,6 @@ def main(args):
     )
 
     if args.task:
-        args.resume = True
         path = "./params/" + args.dataset + "_net.pt"
         task_model.load_state_dict(torch.load(path))
         for data in train_set:
@@ -182,8 +182,11 @@ def main(args):
                 .detach()
             )
 
+        for param in task_model.parameters():
+            param.requires_grad = False
+
     ### resume training if necessary ###
-    if args.resume:
+    if not args.task and args.resume:
         path = "./params/" + args.dataset + "_net.pt"
         task_model.load_state_dict(torch.load(path))
 
