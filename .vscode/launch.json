@@ -1,0 +1,28 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Run Main File",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--dataset", "ba2",
+                "--batch_size", "64",
+                "--alpha_reg", "0.0",
+                "--alpha_diff", "0.0",
+                "--hidden_channels1", "128",
+                "--hidden_channels2", "128",
+                "--hidden_channels3", "128",
+                "--device", "cuda",
+                "--epoch", "50",
+                "--task",
+                "--writer"
+            ]
+        }
+    ]
+}

@@ -147,15 +147,26 @@ def validate(
     for sparsity, true_sparsity in zip(sparsities, true_sparsities):
         tmp_set = []
         for spa_data in spa_set:
+            # print(spa_data.idx)
             spa_data = spa_data.to(device)
             edge_weight_causal, _, _, _, _, _ = explainer_model(
                 spa_data.x, spa_data.edge_index, device=device)
+ 
+            noise = (torch.randn(edge_weight_causal.shape[0]//2)*1e-4).repeat_interleave(2)
+            noise = noise.to(device)
 
-            topk = max(ceil(spa_data.edge_index.shape[1] * sparsity), 1)
+            edge_weight_causal += noise
+
+            topk = max(ceil(spa_data.edge_index.shape[1] * sparsity), 2)
+            topk = topk//2*2
             threshold = edge_weight_causal.sort(
                 descending=True).values.topk(topk).values[-1]
+            
             tmp_edge = spa_data.edge_index.T[edge_weight_causal >= threshold].T
+            if tmp_edge.shape[1]%2 != 0:
+                print('error')
             tmp_set.append(
+                # Data(x=spa_data.x, edge_index=tmp_edge, y=spa_data.y, idx=spa_data.idx))
                 Data(x=spa_data.x, edge_index=tmp_edge, y=spa_data.y))
         spa_set = tmp_set
         val_loader = DataLoader(tmp_set, batch_size=batch_size)

@@ -157,7 +157,7 @@ def main(args):
 
     if args.task:
         path = "./params/" + args.dataset + "_net.pt"
-        task_model.load_state_dict(torch.load(path))
+        task_model.load_state_dict(torch.load(path, map_location=device))
         for data in train_set:
             data.y[:] = (
                 task_model(data.x.to(device), data.edge_index.to(device))
@@ -188,7 +188,7 @@ def main(args):
     ### resume training if necessary ###
     if not args.task and args.resume:
         path = "./params/" + args.dataset + "_net.pt"
-        task_model.load_state_dict(torch.load(path))
+        task_model.load_state_dict(torch.load(path, map_location=device))
 
     ### tensorboard setting ###
     if args.writer:
