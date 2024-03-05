@@ -9,7 +9,7 @@ from torch_geometric.nn import (
     NNConv,
     BatchNorm,
     global_mean_pool,
-)
+)                                                                              
 # from torch_geometric.utils import to_dense_adj, dense_to_sparse, to_dense_batch
 from torch_geometric.data import Data, Batch
 import torch
@@ -25,6 +25,7 @@ class CIDER(nn.Module):
         hidden_channels1=32,
         hidden_channels2=64,
         hidden_channels3=10,
+        decoder_hidden_dims=[],
         decoder_act=torch.relu,
     ) -> None:
         super(CIDER, self).__init__()
@@ -40,8 +41,8 @@ class CIDER(nn.Module):
         self.gcn_logvar_causal = GCNConv(hidden_channels1, hidden_channels2)
         self.gcn_logvar_non_causal = GCNConv(hidden_channels1, hidden_channels2)
 
-        self.decoder_causal = InnerProductDecoderMLP(hidden_dims=None, act=decoder_act)
-        self.decoder_non_causal = InnerProductDecoderMLP(hidden_dims=None, act=decoder_act)
+        self.decoder_causal = InnerProductDecoderMLP(hidden_dims=decoder_hidden_dims, act=decoder_act)
+        self.decoder_non_causal = InnerProductDecoderMLP(hidden_dims=decoder_hidden_dims, act=decoder_act)
         self.task_model = task_model
         self.relu = ReLU()
         self.hidden_channels2 = hidden_channels2
@@ -120,6 +121,7 @@ class CIDER(nn.Module):
         mu_causal, mu_non_causal, logvar_causal, logvar_non_causal = self.encode(
             x, edge_index, edge_attr
         )
+
         z_causal = self.reparameterize(mu_causal, logvar_causal, device)
 
         z_non_causal = self.reparameterize(mu_non_causal, logvar_non_causal, device)
@@ -140,7 +142,7 @@ class CIDER(nn.Module):
         self,
         data: torch_geometric.data.Data,
         causal_criterion,
-        num_sample=5,
+        num_sample=4,
         sparsity=0.8,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     ):
@@ -197,54 +199,53 @@ class CIDER(nn.Module):
         )
 
         # compute uniform loss for non-causal graph
-        edge_index_non_causal = data_batch.edge_index.T[edge_weight_non_causal >= 0].T
-        sampled_y_non_cuasal = self.task_model(
-            data_batch.x, edge_index_non_causal, batch=data_batch.batch
-        )
-        uniform_target = (
-            torch.ones_like(sampled_y_non_cuasal) / self.task_model.label_dim
-        ).to(device)
-        loss_uniform = F.kl_div(
-            F.softmax(sampled_y_non_cuasal), uniform_target, reduction="batchmean"
-        )
+        # edge_index_non_causal = data_batch.edge_index.T[edge_weight_non_causal > 0].T
+        # sampled_y_non_cuasal = self.task_model(
+        #     data_batch.x, edge_index_non_causal, batch=data_batch.batch
+        # )
+        # uniform_target = (
+        #     torch.ones_like(sampled_y_non_cuasal) / self.task_model.label_dim
+        # ).to(device)
+        # loss_uniform = F.kl_div(
+        #     F.softmax(sampled_y_non_cuasal, dim=1), uniform_target, reduction="batchmean"
+        # )
 
-
-        # TODO: There are some error, the threshold is not correct, it should be computed by edge_weight_causal only
         # repeat causal edge weights for each counterfactual sample and add then to edge_weight
-        # edge_weight = edge_weight_causal.repeat(num_sample) + edge_weight_non_causal
-        edge_weight = edge_weight_causal.repeat(num_sample)
+        edge_weight = edge_weight_causal.repeat(num_sample) + edge_weight_non_causal
+        # edge_weight = edge_weight_causal.repeat(num_sample)
 
-        # Select top-k edges based on the weight threshold to enforce sparsity
-        topk = min(
-            ceil(edge_weight_causal.shape[0] * sparsity),
-            edge_weight_causal.shape[0] - 1,
-        )
+        # # Select top-k edges based on the weight threshold to enforce sparsity
+        # topk = min(
+        #     ceil(edge_weight_causal.shape[0] * sparsity),
+        #     edge_weight_causal.shape[0] - 1,
+        # )
 
-        # reshape the edge_weight to [#num_sample, #edge] to select top-k edges for each sample
-        edge_weight_reshape = edge_weight.reshape(num_sample, -1)
+        # # reshape the edge_weight to [#num_sample, #edge] to select top-k edges for each sample
+        # edge_weight_reshape = edge_weight.reshape(num_sample, -1)
 
-        # sort the edge weights in descending order in first dim and select the top-k edges for each sample(every row represents a sample)
-        threshold = (
-            edge_weight_reshape.sort(descending=True, dim=1)
-            .values.topk(topk)
-            .values[:, -1]
-        )
+        # # sort the edge weights in descending order in first dim and select the top-k edges for each sample(every row represents a sample)
+        # threshold = (
+        #     edge_weight_reshape.sort(descending=True, dim=1)
+        #     .values.topk(topk)
+        #     .values[:, -1]
+        # )
 
-        # expand the threshold to the same shape as edge_weight_reshape
-        ## threshold.shape: [#num_sample, #edge]
-        threshold = threshold.unsqueeze(1).expand_as(edge_weight_reshape)
+        # # expand the threshold to the same shape as edge_weight_reshape
+        # ## threshold.shape: [#num_sample, #edge]
+        # threshold = threshold.unsqueeze(1).expand_as(edge_weight_reshape)
 
-        # reshape the threshold to verctor and calculate the edge mask
-        ## edge_mask.shape: [#num_sample*#edge]
-        # warning: the > is require to avoid the all edge_weight are 0
-        edge_mask = (edge_weight_reshape > threshold).reshape(-1) | (edge_weight_non_causal>0.5)
+        # # reshape the threshold to verctor and calculate the edge mask
+        # ## edge_mask.shape: [#num_sample*#edge]
+        # # warning: the > is require to avoid the all edge_weight are 0
+        # # edge_mask = (edge_weight_reshape > threshold).reshape(-1) | (edge_weight_non_causal>0.5)
+        # edge_mask = (edge_weight_reshape > threshold).reshape(-1)
 
-        # select the top-k edges for each sample
-        data_batch.edge_index = data_batch.edge_index.T[edge_mask].T
+        # # select the top-k edges for each sample
+        # data_batch.edge_index = data_batch.edge_index.T[edge_mask].T
 
         # Pass the sampled input and  adjacency list to the task model
         sampled_y = self.task_model(
-            data_batch.x, data_batch.edge_index, batch=data_batch.batch
+            data_batch.x, data_batch.edge_index, edge_weight=edge_weight, batch=data_batch.batch
         )
 
         # Calculate the causal loss using the criterion and repeat the target labels
@@ -253,7 +254,8 @@ class CIDER(nn.Module):
         # Calculate the accuracy by comparing the predicted and target labels
         correct = float(sampled_y.argmax(dim=1).eq(data_batch.y).sum().item())
 
-        return loss_uniform, loss_causal, correct / data_batch.num_graphs
+        # return loss_uniform, loss_causal, correct / data_batch.num_graphs
+        return loss_causal, correct / data_batch.num_graphs
 
     @torch.no_grad()
     def get_explainations(
@@ -311,93 +313,20 @@ class CIDER(nn.Module):
         """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std).to(device)
-        return eps 
-        std + mu
-
-
-# class InnerProductDecoderMLP(nn.Module):
-#     """Decoder for using inner product for prediction."""
-
-#     def __init__(
-#         self, input_dim, hidden_dim1, hidden_dim2, dropout=0.1, act=torch.sigmoid
-#     ):
-#         super(InnerProductDecoderMLP, self).__init__()
-
-#         # Fully connected layers
-#         self.fc = nn.Linear(input_dim, hidden_dim1)
-#         self.fc2 = nn.Linear(hidden_dim1, hidden_dim2)
-
-#         self.dropout = dropout
-#         self.act = act
-
-#         # Initialize the parameters
-#         self._reset_parameters()
-
-#     def _reset_parameters(self):
-#         """
-#         Reset model parameters using Xavier initialization.
-#         """
-#         torch.nn.init.xavier_uniform_(self.fc.weight)
-#         torch.nn.init.zeros_(self.fc.bias)
-#         torch.nn.init.xavier_uniform_(self.fc2.weight)
-#         torch.nn.init.zeros_(self.fc2.bias)
-
-#     def forward_all(self, z):
-#         """
-#         Compute the forward pass for the entire graph.
-
-#         Args:
-#             z (torch.Tensor): The latent space Z.
-
-#         Returns:
-#             torch.Tensor: The adjacency matrix of the graph.
-#         """
-#         z = self._forward_fc(z)
-#         adj = self.act(torch.matmul(z, z.t()))
-#         return adj
-
-#     def forward(self, z: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-#         """
-#         Compute the forward pass for the given node-pairs.
-
-#         Args:
-#             z (torch.Tensor): The latent space Z.
-#             edge_index (torch.Tensor): Index tensor representing node-pairs in the graph.
-
-#         Returns:
-#             torch.Tensor: The predicted values for the node-pairs.
-#         """
-#         z = self._forward_fc(z)
-
-#         edge_weight = self.act((z[edge_index[0]] * z[edge_index[1]]).sum(dim=1))
-
-#         return edge_weight
-
-#     def _forward_fc(self, z):
-#         """
-#         Compute the forward pass through the fully connected layers.
-
-#         Args:
-#             z (torch.Tensor): The latent space Z.
-
-#         Returns:
-#             torch.Tensor: The output after passing through the fully connected layers.
-#         """
-#         z1 = torch.relu(self.fc(z))
-#         z2 = torch.sigmoid(self.fc2(z1))
-#         z3 = F.dropout(z2, self.dropout, training=self.training)
-#         return z3
+        if self.training:
+            return mu + eps * std
+        return mu
 
 class InnerProductDecoderMLP(nn.Module):
     """Decoder for using inner product for prediction."""
 
-    def __init__(self, hidden_dims, dropout=0.1, act=torch.sigmoid):
+    def __init__(self, hidden_dims=[], dropout=0.1, act=torch.sigmoid):
         super(InnerProductDecoderMLP, self).__init__()
         self.dropout = dropout
         self.act = act
 
-        # Initialize hidden_dims as an empty list if None is provided
-        hidden_dims = hidden_dims or []
+        # # Initialize hidden_dims as an empty list if None is provided
+        # hidden_dims = hidden_dims or []
 
         # Create the layers based on hidden_dims
         self.fc_layers = nn.ModuleList()
@@ -443,9 +372,18 @@ class InnerProductDecoderMLP(nn.Module):
         """
         Compute the forward pass for the given node-pairs.
         """
+        # if self.fc_layers:
+        #     z = self._forward_fc(z)
+        # edge_weight = self.act((z[edge_index[0]] * z[edge_index[1]]).sum(dim=1))
+        return self.act(self.forward_without_act(z, edge_index))
+
+    def forward_without_act(self, z: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the forward pass for the given node-pairs without activation function.
+        """
         if self.fc_layers:
             z = self._forward_fc(z)
-        edge_weight = self.act((z[edge_index[0]] * z[edge_index[1]]).sum(dim=1))
+        edge_weight = (z[edge_index[0]] * z[edge_index[1]]).sum(dim=1)
         return edge_weight
 
 
